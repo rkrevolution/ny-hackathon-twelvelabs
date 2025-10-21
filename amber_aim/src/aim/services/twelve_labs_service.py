@@ -12,6 +12,8 @@ from twelvelabs import TwelveLabs
 from aim.models.ads import AdClip, AdSearchResult
 from aim.models.placement import PlacementResult
 from aim.services import S3Service
+from aim.services.cache_service import CacheService
+from aim.services.rate_limiter import RateLimiter, RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,11 @@ class TwelveLabsService:
             self.creators_index_id = creators_index_id
             self.ads_index_id = ads_index_id
             self.s3_service = s3_service
+
+            # Initialize caching and rate limiting
+            self.cache = CacheService()
+            self.rate_limiter = RateLimiter()
+
             logger.info("TwelveLabs service initialized successfully")
         except Exception as e:
             logger.error("Failed to initialize TwelveLabs client", exc_info=True)
@@ -199,13 +206,50 @@ class TwelveLabsService:
         logger.info("Analyzing video", extra={"task_id": task_id, "video_id": video_id})
 
         for prompt_name, prompt in prompts:
+            # Check cache first
+            cache_params = {
+                'video_id': video_id,
+                'prompt_name': prompt_name,
+                'prompt': prompt[:50]  # Use first 50 chars as cache key
+            }
+
+            cached_result = self.cache.get('analyze', cache_params)
+            if cached_result is not None:
+                logger.info(
+                    f"✅ Cache HIT for prompt {prompt_name}",
+                    extra={"video_id": video_id}
+                )
+                results[prompt_name] = cached_result
+                continue
+
+            # Check rate limit
+            if not self.rate_limiter.can_make_request('analyze'):
+                logger.error(
+                    f"⚠️ Rate limit exceeded for analyze endpoint. "
+                    f"Remaining: {self.rate_limiter.get_remaining('analyze')}/50"
+                )
+                raise TwelveLabsServiceError(
+                    f"Daily rate limit exceeded for analyze endpoint. "
+                    f"Resets at midnight UTC.",
+                    error_code="RATE_LIMIT_EXCEEDED"
+                )
+
+            # Make API call
             logger.info(
-                f"Analyzing video with prompt {prompt_name}",
+                f"📡 API CALL: Analyzing video with prompt {prompt_name} "
+                f"(remaining: {self.rate_limiter.get_remaining('analyze')}/50)",
                 extra={"task_id": task_id, "video_id": video_id},
             )
+
             result = self.client.analyze(
                 video_id=video_id, prompt=prompt, temperature=0.2
             )
+
+            # Record usage
+            self.rate_limiter.record_request('analyze')
+
+            # Cache result
+            self.cache.set('analyze', cache_params, result.data)
 
             results[prompt_name] = result.data
 
@@ -320,8 +364,41 @@ class TwelveLabsService:
             TwelveLabsServiceError: If the search request fails
         """
         try:
+            # Check cache first
+            cache_params = {
+                'index_id': self.ads_index_id,
+                'query': query_text,
+                'page_limit': page_limit
+            }
+
+            cached_result = self.cache.get('search', cache_params)
+            if cached_result is not None:
+                logger.info(
+                    f"✅ Cache HIT for search query: {query_text}",
+                    extra={"query": query_text}
+                )
+                # Convert back to AdSearchResult objects
+                return [
+                    AdSearchResult(**item) if isinstance(item, dict) else item
+                    for item in cached_result
+                ]
+
+            # Check rate limit
+            if not self.rate_limiter.can_make_request('search'):
+                logger.error(
+                    f"⚠️ Rate limit exceeded for search endpoint. "
+                    f"Remaining: {self.rate_limiter.get_remaining('search')}/50"
+                )
+                raise TwelveLabsServiceError(
+                    f"Daily rate limit exceeded for search endpoint. "
+                    f"Resets at midnight UTC.",
+                    error_code="RATE_LIMIT_EXCEEDED"
+                )
+
+            # Make API call
             logger.info(
-                "Searching ads index",
+                f"📡 API CALL: Searching ads "
+                f"(remaining: {self.rate_limiter.get_remaining('search')}/50)",
                 extra={
                     "query": query_text,
                     "page_limit": page_limit,
@@ -329,7 +406,8 @@ class TwelveLabsService:
                 },
             )
 
-            time.sleep(random.random() * 3)
+            # Remove random sleep - not needed with proper rate limiting
+            # time.sleep(random.random() * 3)
 
             response = self.client.search.query(
                 index_id=self.ads_index_id,
@@ -339,6 +417,9 @@ class TwelveLabsService:
                 group_by="video",
                 sort_option="score",
             )
+
+            # Record usage
+            self.rate_limiter.record_request('search')
 
             results = []
             for item in response:
@@ -358,8 +439,12 @@ class TwelveLabsService:
                     ]
                     results.append(AdSearchResult(id=item.id, clips=clips))
 
+            # Cache results (convert to dict for JSON serialization)
+            results_dict = [result.model_dump() for result in results]
+            self.cache.set('search', cache_params, results_dict)
+
             logger.info(
-                "Ad search completed",
+                "✅ Ad search completed",
                 extra={"query": query_text, "result_count": len(results)},
             )
 

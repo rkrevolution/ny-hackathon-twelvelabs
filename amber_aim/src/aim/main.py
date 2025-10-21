@@ -366,3 +366,44 @@ def get_index_video(index_id: str, video_id: str) -> VideoVector:
     ][0]
 
     return video
+
+
+@app.get("/twelvelabs/usage")
+def get_twelvelabs_usage():
+    """Get TwelveLabs API usage statistics.
+
+    Returns current usage for all endpoints including cache statistics.
+    """
+    usage = twelve_labs_service.rate_limiter.get_usage_summary()
+
+    # Get cache stats
+    cache_files = list(twelve_labs_service.cache.cache_dir.glob("*.json"))
+    cache_size_mb = sum(f.stat().st_size for f in cache_files) / (1024 * 1024)
+
+    # Generate recommendations
+    recommendations = []
+    for endpoint, stats in usage.items():
+        if stats['percentage'] > 80:
+            recommendations.append(
+                f"🔴 {endpoint}: {stats['percentage']:.0f}% used - "
+                f"CRITICAL! Only {stats['remaining']} calls remaining"
+            )
+        elif stats['percentage'] > 50:
+            recommendations.append(
+                f"🟡 {endpoint}: {stats['percentage']:.0f}% used - "
+                f"Monitor carefully"
+            )
+
+    if not recommendations:
+        recommendations.append("✅ All endpoints well within limits")
+
+    return {
+        "rate_limits": usage,
+        "cache": {
+            "entries": len(cache_files),
+            "size_mb": round(cache_size_mb, 2),
+            "cache_dir": str(twelve_labs_service.cache.cache_dir)
+        },
+        "recommendations": recommendations,
+        "status": "healthy"
+    }
