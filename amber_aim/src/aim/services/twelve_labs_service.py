@@ -49,6 +49,8 @@ class TwelveLabsService:
         creators_index_id: str,
         ads_index_id: str,
         s3_service: S3Service,
+        cache_dir: str = "/tmp/twelvelabs_cache",
+        rate_limit_state_file: str = "/tmp/twelvelabs_rate_limit.json",
     ) -> None:
         """Initialize TwelveLabs service.
 
@@ -57,6 +59,8 @@ class TwelveLabsService:
             creators_index_id: Index ID for creator videos
             ads_index_id: Index ID for ad videos
             s3_service: S3Service instance
+            cache_dir: Directory for caching API responses
+            rate_limit_state_file: File path for rate limiter state
         """
         try:
             self.client = TwelveLabs(api_key=api_key)
@@ -64,9 +68,9 @@ class TwelveLabsService:
             self.ads_index_id = ads_index_id
             self.s3_service = s3_service
 
-            # Initialize caching and rate limiting
-            self.cache = CacheService()
-            self.rate_limiter = RateLimiter()
+            # Initialize caching and rate limiting with configurable paths
+            self.cache = CacheService(cache_dir=cache_dir)
+            self.rate_limiter = RateLimiter(state_file=rate_limit_state_file)
 
             logger.info("TwelveLabs service initialized successfully")
         except Exception as e:

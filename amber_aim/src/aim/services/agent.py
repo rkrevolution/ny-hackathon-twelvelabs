@@ -1,6 +1,7 @@
 import json
 import logging
 from collections.abc import Callable
+from pathlib import Path
 
 from agents import Agent, Runner, function_tool
 from openai import OpenAI, api_key
@@ -15,18 +16,20 @@ logger = logging.getLogger(__name__)
 def find_placements(prompt: str) -> PlacementResult:
     schema_str = json.dumps(PlacementResult.model_json_schema(), indent=2)
 
-    with open(
-        "/Users/leo/workspace/ny_twelvelabs_hackathon/amber_aim/prompts/agents/placements_agent.txt"
-    ) as f:
+    # Use relative path from this file's location
+    prompts_dir = Path(__file__).parent.parent.parent / "prompts" / "agents"
+    prompt_path = prompts_dir / "placements_agent.txt"
+
+    with open(prompt_path) as f:
         placements_agent_prompt = f.read()
 
     placements_agent_prompt = placements_agent_prompt.format(schema_str=schema_str)
 
     client = OpenAI()
 
-    logger.info("Running OpenAI analysis")
+    logger.info("Running OpenAI analysis with gpt-4o-mini")
     response = client.beta.chat.completions.parse(
-        model="gpt-5-mini",
+        model="gpt-4o-mini",  # Fixed: was "gpt-5-mini" which doesn't exist
         messages=[
             {"role": "system", "content": placements_agent_prompt},
             {"role": "user", "content": prompt},

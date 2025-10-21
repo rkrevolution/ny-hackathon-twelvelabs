@@ -50,12 +50,14 @@ s3_service = S3Service(
     base_path=settings.s3_base_path,
 )
 
-# Initialize TwelveLabs service
+# Initialize TwelveLabs service with caching and rate limiting
 twelve_labs_service = TwelveLabsService(
     api_key=settings.twelve_labs_api_key,
     creators_index_id=settings.twelve_labs_creators_index_id,
     ads_index_id=settings.twelve_labs_ads_index_id,
     s3_service=s3_service,
+    cache_dir=settings.cache_dir,
+    rate_limit_state_file=settings.rate_limit_state_file,
 )
 
 
